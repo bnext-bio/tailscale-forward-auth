@@ -23,6 +23,7 @@ var (
 	listenAddr       = flag.String("addr", "127.0.0.1:", "address to listen on, defaults to 127.0.0.1:")
 	headerRemoteIP   = flag.String("remote-ip-header", "X-Forwarded-For", "HTTP header field containing the remote IP")
 	headerRemotePort = flag.String("remote-port-header", "X-Forwarded-Port", "HTTP header field containing the remote port")
+	headerFailOpen   = flag.String("fail-open", "X-ForwardAuth-Fail-Open", "Return 200 status even if auth fails, not sending authorization headers.")
 	debug            = flag.Bool("debug", false, "enable debug logging")
 )
 
@@ -59,16 +60,23 @@ func main() {
 			return
 		}
 
+		failHeader := http.StatusUnauthorized
+		failOpen := r.Header.Get(*headerFailOpen)
+		if failOpen == "True" {
+			log.Printf("Fail open is set.")
+			failHeader = http.StatusNoContent
+		}
+
 		client := &tailscale.LocalClient{}
 		info, err := client.WhoIs(r.Context(), remoteAddr.String())
 		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
+			w.WriteHeader(failHeader)
 			log.Printf("can't look up %s: %v", remoteAddr, err)
 			return
 		}
 
 		if len(info.Node.Tags) != 0 {
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(failHeader)
 			log.Printf("node %s is tagged", info.Node.Hostinfo.Hostname())
 			return
 		}
@@ -81,7 +89,7 @@ func main() {
 			var ok bool
 			_, tailnet, ok = strings.Cut(info.Node.Name, info.Node.ComputedName+".")
 			if !ok {
-				w.WriteHeader(http.StatusUnauthorized)
+				w.WriteHeader(failHeader)
 				log.Printf("can't extract tailnet name from hostname %q", info.Node.Name)
 				return
 			}
@@ -89,7 +97,7 @@ func main() {
 		}
 
 		if expectedTailnet := r.Header.Get("Expected-Tailnet"); expectedTailnet != "" && expectedTailnet != tailnet {
-			w.WriteHeader(http.StatusForbidden)
+			w.WriteHeader(failHeader)
 			log.Printf("user is part of tailnet %s, wanted: %s", tailnet, url.QueryEscape(expectedTailnet))
 			return
 		}
